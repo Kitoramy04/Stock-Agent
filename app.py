@@ -348,7 +348,7 @@ tab1, tab2 = st.tabs([f"📋 {title_suffix} 전종목 스크리너", "📈 개�
 
 with tab1:
     # 280행 오류 완전 해결: 인자 명시
-    col1, col2 = st.columns()
+    col1, col2 = st.columns(2)
     with col1:
         st.subheader(f"총 {len(df_summary)}개 감시 종목 현황")
     with col2:
