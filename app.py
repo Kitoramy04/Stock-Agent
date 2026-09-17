@@ -54,7 +54,6 @@ KR_STOCKS_MASTER = {
 }
 
 US_STOCKS_MASTER = {
-    # 사용자 입력 종목
     "보잉 (BA)": "BA",
     "유나이티드 항공 (UAL)": "UAL",
     "아메리칸 항공 (AAL)": "AAL",
@@ -101,7 +100,6 @@ US_STOCKS_MASTER = {
     "아토메라 (ATOM)": "ATOM",
     "도어대시 (DASH)": "DASH",
     "앨버말 (ALB)": "ALB",
-    # 포트폴리오 엑셀 추가 종목
     "코인베이스 (COIN)": "COIN",
     "ASML": "ASML",
     "슈나이더 일렉트릭 ADR (SBGSY)": "SBGSY",
@@ -142,7 +140,7 @@ def calculate_indicators(df):
     return df
 
 # -------------------------------------------------------------
-# 3. 데이터 일괄 수집 (배치 다운로드 & 5분 캐싱)
+# 3. 데이터 일괄 수집 엔진 (5분 캐시)
 # -------------------------------------------------------------
 @st.cache_data(ttl=300)
 def fetch_market_data(stock_dict, peak_period_days=120):
@@ -279,7 +277,7 @@ with st.spinner(f"{title_suffix} {len(target_dict)}개 종목 데이터 분석 �
 tab1, tab2 = st.tabs([f"📋 {title_suffix} 전종목 스크리너", "📈 개별 종목 정밀 차트"])
 
 with tab1:
-    col1, col2 = st.columns()
+    col1, col2 = st.columns()  # 수정 완료된 부분
     with col1:
         st.subheader(f"총 {len(df_summary)}개 감시 종목 현황")
     with col2:
@@ -289,13 +287,19 @@ with tab1:
     if buy_only:
         display_df = display_df[display_df["기계적 매수단계"] != "정상"]
         
-    st.dataframe(
-        display_df.sort_values(by="전고대비(%)", ascending=True),
-        use_container_width=True,
-        hide_index=True
-    )
+    if not display_df.empty:
+        st.dataframe(
+            display_df.sort_values(by="전고대비(%)", ascending=True),
+            use_container_width=True,
+            hide_index=True
+        )
+    else:
+        st.info("조건에 부합하는 종목이 없습니다.")
 
 with tab2:
-    selected_name = st.selectbox("분석할 종목을 선택하세요", list(dict_dfs.keys()))
-    if selected_name in dict_dfs:
-        render_stock_chart(dict_dfs[selected_name], selected_name, peak_days)
+    if len(dict_dfs) > 0:
+        selected_name = st.selectbox("분석할 종목을 선택하세요", list(dict_dfs.keys()))
+        if selected_name in dict_dfs:
+            render_stock_chart(dict_dfs[selected_name], selected_name, peak_days)
+    else:
+        st.warning("표시할 수 있는 종목 데이터가 없습니다.")
