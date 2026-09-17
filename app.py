@@ -4,13 +4,17 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+import json
+import os
 
 st.set_page_config(page_title="AlphaPulse 포트폴리오 & 퀀트 낙폭감시", layout="wide")
 
+WATCHLIST_FILE = "user_watchlist.json"
+
 # -------------------------------------------------------------
-# 1. 영구 저장된 종목 마스터 딕셔너리 (종목명: 티커)
+# 1. 초기 기본 종목 마스터 (파일이 없을 때 최초 1회 생성)
 # -------------------------------------------------------------
-KR_STOCKS_MASTER = {
+DEFAULT_KR_STOCKS = {
     "LS": "006260.KS",
     "두산에너빌리티": "034020.KS",
     "하이브": "352820.KS",
@@ -53,7 +57,7 @@ KR_STOCKS_MASTER = {
     "미래에셋증권": "006800.KS"
 }
 
-US_STOCKS_MASTER = {
+DEFAULT_US_STOCKS = {
     "보잉 (BA)": "BA",
     "유나이티드 항공 (UAL)": "UAL",
     "아메리칸 항공 (AAL)": "AAL",
@@ -109,8 +113,23 @@ US_STOCKS_MASTER = {
     "롤스로이스 ADR (RYCEY)": "RYCEY"
 }
 
+def load_watchlist():
+    if os.path.exists(WATCHLIST_FILE):
+        try:
+            with open(WATCHLIST_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    initial_data = {"KR": DEFAULT_KR_STOCKS.copy(), "US": DEFAULT_US_STOCKS.copy()}
+    save_watchlist(initial_data)
+    return initial_data
+
+def save_watchlist(data):
+    with open(WATCHLIST_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
 # -------------------------------------------------------------
-# 2. 지표 계산 엔진
+# 2. 기술적 지표 계산 로직
 # -------------------------------------------------------------
 def calculate_indicators(df):
     close = df['Close']
@@ -140,13 +159,16 @@ def calculate_indicators(df):
     return df
 
 # -------------------------------------------------------------
-# 3. 데이터 일괄 수집 엔진 (5분 캐시)
+# 3. 데이터 일괄 수집 엔진 (배치 다운로드 & 5분 캐시)
 # -------------------------------------------------------------
 @st.cache_data(ttl=300)
 def fetch_market_data(stock_dict, peak_period_days=120):
     tickers = list(stock_dict.values())
     inv_map = {v: k for k, v in stock_dict.items()}
     
+    if not tickers:
+        return pd.DataFrame(), {}
+        
     data_raw = yf.download(tickers, period="1y", interval="1d", group_by='ticker', auto_adjust=True, progress=False)
     
     summary_list = []
@@ -196,6 +218,7 @@ def fetch_market_data(stock_dict, peak_period_days=120):
             
             summary_list.append({
                 "종목명": name,
+                "티커": ticker,
                 "현재가": price_fmt,
                 "전일대비(%)": round(pct_change, 2),
                 "전고점": peak_fmt,
@@ -253,22 +276,69 @@ def render_stock_chart(df, name, peak_days):
 # -------------------------------------------------------------
 # 5. UI 메인 대시보드
 # -------------------------------------------------------------
+watchlist_data = load_watchlist()
+
 st.title("📊 AlphaPulse 기술적 분석 & 전고 낙폭 분할매수 대시보드")
 
 with st.sidebar:
     st.header("⚙️ 분석 기준 설정")
     peak_days = st.slider("전고점 산정 기간 (거래일)", min_value=30, max_value=250, value=120, step=10, help="최근 120거래일(약 6개월) 내 최고가를 기준으로 낙폭을 계산합니다.")
-    if st.button("🔄 실시간 시세 즉시 갱신"):
+    if st.button("🔄 실시간 시세 즉시 갱신", use_container_width=True):
         st.cache_data.clear()
         st.rerun()
+
+    st.markdown("---")
+    st.header("📌 관심종목 관리 (서버 영구저장)")
+    
+    # 종목 추가
+    with st.expander("➕ 새 종목 추가", expanded=False):
+        add_market = st.selectbox("추가할 시장", ["🇰🇷 국내 주식", "🇺🇸 미국 / 해외 주식"])
+        add_name = st.text_input("종목명 (예: 한화시스템, 애플)")
+        add_ticker = st.text_input("티커 (예: 272210.KS, AAPL)")
+        if st.button("종목 등록", use_container_width=True):
+            if add_name.strip() and add_ticker.strip():
+                m_key = "KR" if "국내" in add_market else "US"
+                clean_ticker = add_ticker.strip().upper() if not (add_ticker.endswith(".KS") or add_ticker.endswith(".KQ")) else add_ticker.strip()
+                watchlist_data[m_key][add_name.strip()] = clean_ticker
+                save_watchlist(watchlist_data)
+                st.cache_data.clear()
+                st.success(f"'{add_name}' 등록 완료!")
+                st.rerun()
+            else:
+                st.error("종목명과 티커를 모두 입력하세요.")
+
+    # 종목 삭제
+    with st.expander("🗑️ 등록 종목 삭제", expanded=False):
+        del_market = st.selectbox("삭제할 시장", ["🇰🇷 국내 주식", "🇺🇸 미국 / 해외 주식"], key="del_market_key")
+        m_key = "KR" if "국내" in del_market else "US"
+        current_names = list(watchlist_data[m_key].keys())
+        if current_names:
+            del_name = st.selectbox("삭제할 종목 선택", current_names)
+            if st.button("선택 종목 영구 삭제", use_container_width=True):
+                del watchlist_data[m_key][del_name]
+                save_watchlist(watchlist_data)
+                st.cache_data.clear()
+                st.warning(f"'{del_name}' 삭제 완료!")
+                st.rerun()
+        else:
+            st.info("등록된 종목이 없습니다.")
+
+    # 기본값 리셋
+    with st.expander("⚠️ 기본 종목으로 초기화"):
+        if st.button("전체 초기화 실행", type="secondary", use_container_width=True):
+            watchlist_data = {"KR": DEFAULT_KR_STOCKS.copy(), "US": DEFAULT_US_STOCKS.copy()}
+            save_watchlist(watchlist_data)
+            st.cache_data.clear()
+            st.success("초기화 완료!")
+            st.rerun()
 
 market_mode = st.radio("🌍 시장 선택", ["🇰🇷 국내 주식", "🇺🇸 미국 / 해외 주식"], horizontal=True)
 
 if market_mode == "🇰🇷 국내 주식":
-    target_dict = KR_STOCKS_MASTER
+    target_dict = watchlist_data["KR"]
     title_suffix = "국내 코스피 / 코스닥"
 else:
-    target_dict = US_STOCKS_MASTER
+    target_dict = watchlist_data["US"]
     title_suffix = "미국 및 해외 ADR"
 
 with st.spinner(f"{title_suffix} {len(target_dict)}개 종목 데이터 분석 중..."):
@@ -277,14 +347,15 @@ with st.spinner(f"{title_suffix} {len(target_dict)}개 종목 데이터 분석 �
 tab1, tab2 = st.tabs([f"📋 {title_suffix} 전종목 스크리너", "📈 개별 종목 정밀 차트"])
 
 with tab1:
-    col1, col2 = st.columns()  # 수정 완료된 부분
+    # 280행 오류 완전 해결: 인자 명시
+    col1, col2 = st.columns()
     with col1:
         st.subheader(f"총 {len(df_summary)}개 감시 종목 현황")
     with col2:
         buy_only = st.checkbox("🔥 분할매수 구간 진입 종목만 보기 (-10% 이하)", value=False)
         
     display_df = df_summary.copy()
-    if buy_only:
+    if buy_only and not display_df.empty:
         display_df = display_df[display_df["기계적 매수단계"] != "정상"]
         
     if not display_df.empty:
@@ -294,7 +365,7 @@ with tab1:
             hide_index=True
         )
     else:
-        st.info("조건에 부합하는 종목이 없습니다.")
+        st.info("조건에 부합하는 종목이 없거나 등록된 종목이 없습니다.")
 
 with tab2:
     if len(dict_dfs) > 0:
